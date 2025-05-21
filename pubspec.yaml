@@ -1,5 +1,5 @@
 name: aws_image
-description: "A new Flutter package project."
+description: "A Flutter package for loading, caching, and displaying images from AWS S3 using presigned URLs or BuckerKey"
 version: 1.0.0
 homepage: https://github.com/kishormainali/aws_image
 repository: https://github.com/kishormainali/aws_image
