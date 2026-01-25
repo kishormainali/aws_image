@@ -1,3 +1,4 @@
+import 'package:aws_image/src/client/enums.dart';
 import 'package:aws_image/src/utils/utils.dart';
 import 'package:equatable/equatable.dart';
 
@@ -5,14 +6,14 @@ import 'package:equatable/equatable.dart';
 /// A transformer for AWS presigned requests.
 /// It provides methods for transforming the request
 /// {@endtemplate}
-abstract class PresignedRequestTransformer with EquatableMixin {
-  const PresignedRequestTransformer();
+abstract class RequestTransformer with EquatableMixin {
+  const RequestTransformer();
 
   /// transform the presigned URL into a request
   Map<String, dynamic> transformRequest(
     String bucketKey, {
     String? contentType,
-    String method = 'GET',
+    AwsUrlType type = AwsUrlType.GET,
   });
 
   @override
@@ -23,41 +24,39 @@ abstract class PresignedRequestTransformer with EquatableMixin {
 /// A transformer for AWS REST presigned requests.
 /// It provides methods for transforming the request
 /// {@endtemplate}
-class DefaultRestPresignedRequestTransformer
-    extends PresignedRequestTransformer {
+class DefaultRestRequestTransformer extends RequestTransformer {
   /// {@macro aws_request_transformer}
-  const DefaultRestPresignedRequestTransformer();
+  const DefaultRestRequestTransformer();
 
   @override
   Map<String, dynamic> transformRequest(
     String bucketKey, {
     String? contentType,
-    String method = 'GET',
+    AwsUrlType type = AwsUrlType.GET,
   }) {
     return {
       'key': parseBucketKey(bucketKey),
       'contentType': contentType,
-      'method': method,
+      'method': type.name,
     };
   }
 }
 
-class DefaultGqlPresignedRequestTransformer
-    extends PresignedRequestTransformer {
+class DefaultGqlRequestTransformer extends RequestTransformer {
   /// {@macro aws_request_transformer}
-  const DefaultGqlPresignedRequestTransformer();
+  const DefaultGqlRequestTransformer();
 
   @override
   Map<String, dynamic> transformRequest(
     String bucketKey, {
     String? contentType,
-    String method = 'GET',
+    AwsUrlType type = AwsUrlType.GET,
   }) {
     return {
       'input': {
-        'key': bucketKey,
+        'key': parseBucketKey(bucketKey),
         'contentType': contentType,
-        'method': method,
+        'method': type.name,
       },
     };
   }

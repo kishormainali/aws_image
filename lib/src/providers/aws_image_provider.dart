@@ -1,78 +1,94 @@
 import 'dart:async';
-import 'dart:ui' show Codec;
+import 'dart:ui' as ui;
 
-import 'package:aws_image/src/client/http_client.dart';
-import 'package:aws_image/src/utils/_extensions.dart';
+import 'package:aws_image/aws_image.dart';
 import 'package:flutter/foundation.dart';
-import 'package:flutter/services.dart';
 import 'package:flutter/widgets.dart';
 import 'package:fp_logger/fp_logger.dart';
 import 'package:mime/mime.dart';
 
-import '../client/image_cache_service.dart';
-import '../utils/utils.dart';
-
-/// {@template aws_image}
-/// A custom image provider for loading images from AWS S3.
-/// It handles caching, loading from network, and refreshing expired URLs.
-/// It uses the [AwsImageLoader] to refresh the URL if it is expired.
+/// {@template aws_image_provider}
+/// An [ImageProvider] that loads images from AWS S3 with caching support.
+///
+/// This provider handles:
+/// - Fetching images from AWS S3 using presigned URLs
+/// - Local caching with configurable duration
+/// - Automatic cache invalidation after [cacheDuration]
+/// - Retry logic for failed requests
+/// - Presigned URL refresh when expired
+///
+/// ## Basic Usage
+///
+/// ```dart
+/// Image(
+///   image: AwsImageProvider(
+///     client: myAwsClient,
+///     url: 'https://bucket.s3.amazonaws.com/image.jpg',
+///   ),
+/// )
+/// ```
+///
+/// ## With Custom Cache Duration
+///
+/// ```dart
+/// AwsImageProvider(
+///   client: myAwsClient,
+///   url: imageUrl,
+///   cacheDuration: const Duration(days: 30),
+/// )
+/// ```
+///
+/// See also:
+/// - [AwsImage] for a convenient widget wrapper.
+/// - [RawAwsImage] for advanced widget usage.
 /// {@endtemplate}
+@immutable
 class AwsImageProvider extends ImageProvider<AwsImageProvider> {
-  ///{@macro aws_image}
-  AwsImageProvider({
-    this.presignedUrl,
-    String? bucketKey,
-    required this.imageClient,
-    this.headers = const {},
-    this.queryParameters = const {},
+  /// {@macro aws_image_provider}
+  const AwsImageProvider({
+    required this.client,
+    required this.url,
+    this.scale = 1.0,
     this.cacheDuration = defaultCacheDuration,
     this.maxRetries = defaultMaxRetries,
-    this.retryDelay = defaultRetryDelay,
-    this.scale = defaultScale,
     this.forceRefresh = false,
-  })  : assert(
-          presignedUrl.isNotNullOrEmpty || bucketKey.isNotNullOrEmpty,
-          'At least one of presignedUrl or bucketKey must be provided.',
-        ),
-        bucketKey = bucketKey ?? parseBucketKey(presignedUrl!),
-        cacheKey = parseCacheKey(presignedUrl, bucketKey);
+    this.retryDelay = defaultRetryDelay,
+    this.headers = const {},
+    this.queryParameters = const {},
+  });
 
-  /// presigned url info
-  final String? presignedUrl;
+  /// The AWS client for fetching images and presigned URLs.
+  final AwsImageClient client;
 
-  /// bucket key to retrieve the image
-  final String bucketKey;
+  /// The image URL or S3 object key.
+  final String url;
 
-  /// cache key to store the image
-  final String cacheKey;
-
-  /// aws image client
-  final AwsImageClient imageClient;
-
-  /// headers per request
-  final Map<String, dynamic> headers;
-
-  /// query parameters for the request
-  final Map<String, dynamic> queryParameters;
-
-  /// The cache duration for the image.
-  /// Default is 7 days.
-  final Duration cacheDuration;
-
-  /// The maximum number of retries to load the image from the network.
-  /// Default is 3.
-  final int maxRetries;
-
-  /// The delay between retries.
-  /// Default is 2 seconds.
-  final Duration retryDelay;
-
-  /// The scale of the image.
-  /// Default is 1.0.
+  /// Scale factor for the image.
   final double scale;
 
-  /// Whether to force refresh the image.
+  /// Duration to cache the image locally before invalidation.
+  final Duration cacheDuration;
+
+  /// Maximum retry attempts for failed requests.
+  final int maxRetries;
+
+  /// Whether to bypass cache and fetch fresh.
   final bool forceRefresh;
+
+  /// Delay between retry attempts.
+  final Duration retryDelay;
+
+  /// HTTP headers for the request.
+  final Map<String, dynamic> headers;
+
+  /// Query parameters for the request.
+  final Map<String, dynamic> queryParameters;
+
+  /// Cache key derived from the URL.
+  String get cacheKey => parseCacheKey(url);
+
+  // Access the singleton cache manager
+  static final cacheManager = AwsCacheManager.instance;
 
   @override
   Future<AwsImageProvider> obtainKey(ImageConfiguration configuration) {
@@ -80,172 +96,148 @@ class AwsImageProvider extends ImageProvider<AwsImageProvider> {
   }
 
   @override
-  Future<bool> evict({
-    ImageCache? cache,
-    ImageConfiguration configuration = ImageConfiguration.empty,
-  }) async {
-    await ImageCacheService().deleteImageCache(cacheKey);
-    return true;
-  }
-
-  @override
   ImageStreamCompleter loadImage(
     AwsImageProvider key,
     ImageDecoderCallback decode,
   ) {
-    final StreamController<ImageChunkEvent> chunkEvents =
-        StreamController<ImageChunkEvent>();
+    final chunkEvents = StreamController<ImageChunkEvent>();
     return MultiFrameImageStreamCompleter(
-      codec: _loadAsync(key, decode, chunkEvents),
-      scale: scale,
+      codec: _loadAsync(key, chunkEvents, decode),
       chunkEvents: chunkEvents.stream,
-      debugLabel: key.presignedUrl,
+      scale: key.scale,
+      debugLabel: key.cacheKey,
       informationCollector: () => <DiagnosticsNode>[
-        DiagnosticsProperty<ImageProvider>('ImageProvider', this),
-        DiagnosticsProperty<AwsImageProvider>('AwsImageProvider', key),
-        ErrorDescription(
-          'The URL has expired. Please refresh the image url using loader.',
-        ),
-        ErrorDescription('URL: ${key.presignedUrl}'),
+        DiagnosticsProperty<ImageProvider>('Image provider', this),
+        DiagnosticsProperty<AwsImageProvider>('Image key', key),
       ],
     );
   }
 
-  /// _loadAsync loads the image asynchronously.
-  /// It uses the [AwsImageLoader] to refresh the URL if it is expired.
-  /// It returns a [Codec] that can be used to decode the image.
-  Future<Codec> _loadAsync(
+  /// Load image bytes, either from cache or network.
+  Future<ui.Codec> _loadAsync(
     AwsImageProvider key,
-    ImageDecoderCallback decode,
     StreamController<ImageChunkEvent> chunkEvents,
+    ImageDecoderCallback decode,
   ) async {
-    assert(
-      key == this,
-      'ImageProvider key should be the same as the original key.',
-    );
+    try {
+      // Check if cache is valid (not expired)
+      if (!forceRefresh) {
+        final isCacheValid = await cacheManager.isCacheValid(
+          key.cacheKey,
+          key.cacheDuration,
+        );
 
-    Uint8List? imageBytes;
+        if (isCacheValid) {
+          final cachedBytes = await cacheManager.getFromCache(key.cacheKey);
+          if (cachedBytes != null) {
+            final buffer = await ui.ImmutableBuffer.fromUint8List(cachedBytes);
+            return decode(buffer);
+          }
+        } else {
+          // Cache expired, invalidate it
+          await cacheManager.invalidate(key.cacheKey);
+        }
+      }
 
-    /// local cache
-    if (!key.forceRefresh) {
-      imageBytes = await ImageCacheService().getCachedImage(key.cacheKey);
-    }
+      // Fetch from network
+      final bytes = await _fetchWithRetry(key, chunkEvents);
+      if (bytes == null || bytes.isEmpty) {
+        throw StateError('Failed to load image: empty or null bytes');
+      }
 
-    // If not in cache or forceRefresh, load from network
-    imageBytes ??= await _loadFromNetwork(key, chunkEvents);
-
-    if (imageBytes != null) {
-      unawaited(ImageCacheService().cacheFile(key.cacheKey, imageBytes));
-      final buffer = await ImmutableBuffer.fromUint8List(imageBytes);
+      // Cache the fetched bytes with timestamp
+      await cacheManager.cacheImage(key.cacheKey, bytes);
+      final buffer = await ui.ImmutableBuffer.fromUint8List(bytes);
       return decode(buffer);
+    } catch (e, st) {
+      chunkEvents.addError(e, st);
+      rethrow;
+    } finally {
+      await chunkEvents.close();
     }
-    unawaited(evict());
-    await chunkEvents.close();
-    return Future.error('Failed to load image codec.', StackTrace.current);
   }
 
-  /// loadFromNetwork loads the image from network and returns the bytes.
-  /// It also handles retries and chunk events.
-  /// It uses the [AwsImageLoader] to refresh the URL if it is expired.
-  /// It returns null if the image fails to load.
-  Future<Uint8List?> _loadFromNetwork(
+  /// Fetch image bytes with retry logic.
+  Future<Uint8List?> _fetchWithRetry(
     AwsImageProvider key,
     StreamController<ImageChunkEvent> chunkEvents,
   ) async {
-    assert(
-      key == this,
-      'ImageProvider key should be the same as the original key.',
-    );
-    String? imageUrl = key.presignedUrl;
+    Object? lastError;
+    StackTrace? lastStackTrace;
 
-    /// If the URL is not provided, get it from the image client.
-    imageUrl ??= await _refetchImage(key);
-
-    if (imageUrl.isNullOrEmpty) {
-      unawaited(evict());
+    final imageUrl = await _resolveImageUrl();
+    if (imageUrl == null || imageUrl.isEmpty) {
       return null;
     }
 
-    // If the URL is expired, refresh it using the loader.
-    if (isUrlExpired(imageUrl!)) {
-      Logger.d(
-        'Presigned URL is expired. Refreshing it using loader.',
-        tag: 'AwsImageProvider',
-      );
-      imageUrl = await _refetchImage(key);
-      if (imageUrl == null) {
-        unawaited(evict());
-        return null;
+    for (var attempt = 0; attempt < maxRetries; attempt++) {
+      try {
+        return await client.getImage(
+          url: imageUrl,
+          headers: key.headers,
+          queryParameters: key.queryParameters,
+          onReceiveProgress: (loaded, total) {
+            if (total < 0) {
+              return;
+            }
+            chunkEvents.add(ImageChunkEvent(
+              cumulativeBytesLoaded: loaded,
+              expectedTotalBytes: total,
+            ));
+          },
+        );
+      } catch (e, st) {
+        lastError = e;
+        lastStackTrace = st;
+        if (attempt < maxRetries - 1) {
+          await Future<void>.delayed(retryDelay);
+        }
       }
     }
 
-    // If the URL is still empty, return null.
-    if (imageUrl.isNullOrEmpty) return null;
-
-    // Load the image from network.
-    final response = await key.imageClient.getImage(
-      url: imageUrl,
-      headers: key.headers,
-      queryParameters: key.queryParameters,
-      onReceiveProgress: (received, total) {
-        if (total == -1) return;
-        chunkEvents.add(
-          ImageChunkEvent(
-            cumulativeBytesLoaded: received,
-            expectedTotalBytes: total,
-          ),
-        );
-      },
-      maxRetries: key.maxRetries,
-      retryDelay: key.retryDelay,
-      onError: (error, stackTrace) {
-        evict();
-        FlutterError.reportError(
-          FlutterErrorDetails(
-            exception: error,
-            stack: stackTrace,
-            library: 'aws_image',
-            context: ErrorDescription(error.toString()),
-            informationCollector: () => <DiagnosticsNode>[
-              DiagnosticsProperty<AwsImageProvider>('AwsImageProvider', key),
-              ErrorDescription('URL: $imageUrl'),
-            ],
-          ),
-        );
-      },
-    );
-    return response;
-  }
-
-  Future<String?> _refetchImage(AwsImageProvider key) async {
-    return await key.imageClient.getPresignedUrl(
-      key.bucketKey,
-      contentType: lookupMimeType(key.bucketKey),
+    Error.throwWithStackTrace(
+      lastError ??
+          Exception('Failed to fetch image after $maxRetries attempts'),
+      lastStackTrace ?? StackTrace.current,
     );
   }
 
-  @override
-  int get hashCode => Object.hashAll([
-        imageClient,
-        presignedUrl,
-        cacheKey,
-        scale,
-        forceRefresh,
-        cacheDuration,
-        maxRetries,
-        retryDelay,
-      ]);
+  /// Resolve the image URL, refreshing if expired.
+  Future<String?> _resolveImageUrl() async {
+    if (isValidUrl(url) && !isUrlExpired(url)) {
+      return url;
+    }
+    Logger.d(
+      'URL invalid or expired. Fetching new URL. from the AwsRequest',
+      tag: 'AwsImageProvider',
+    );
+    return _fetchPresignedUrl(url);
+  }
+
+  Future<String?> _fetchPresignedUrl(String key) async {
+    final res = await client.getPresignedUrl(
+      key,
+      contentType: lookupMimeType(key),
+      type: AwsUrlType.GET,
+    );
+
+    if (res?.previewUrl == null) return null;
+    return res!.previewUrl!;
+  }
 
   @override
   bool operator ==(Object other) {
     if (identical(this, other)) return true;
-    if (other is! AwsImageProvider) return false;
-    return other.presignedUrl == presignedUrl &&
+    return other is AwsImageProvider &&
         other.cacheKey == cacheKey &&
         other.scale == scale &&
-        other.forceRefresh == forceRefresh &&
-        other.cacheDuration == cacheDuration &&
-        other.maxRetries == maxRetries &&
-        other.retryDelay == retryDelay;
+        other.forceRefresh == forceRefresh;
   }
+
+  @override
+  int get hashCode => Object.hash(cacheKey, scale, forceRefresh);
+
+  @override
+  String toString() =>
+      '${objectRuntimeType(this, 'AwsImageProvider')}("$cacheKey", scale: $scale)';
 }

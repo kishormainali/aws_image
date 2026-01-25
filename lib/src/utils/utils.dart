@@ -4,7 +4,7 @@ import 'package:aws_image/src/utils/_extensions.dart';
 import 'package:crypto/crypto.dart';
 
 /// Default cache duration for images.
-const defaultCacheDuration = Duration(days: 2);
+const defaultCacheDuration = Duration(days: 3);
 
 /// Default maximum number of retries for requests.
 const defaultMaxRetries = 3;
@@ -68,7 +68,8 @@ String? parseOperationName(String query) {
 
 /// Parses the bucket key from a URL.
 String parseBucketKey(String url) {
-  final uri = Uri.parse(url);
+  final uri = Uri.tryParse(url);
+  if (uri == null) return url;
   if (uri.pathSegments.isEmpty) {
     throw ArgumentError(
       'Invalid URL: $url. Unable to parse bucket key.',
@@ -91,23 +92,18 @@ bool isValidQuery(String query) {
 }
 
 /// Parses the cache key from a presigned URL.
-String parseCacheKey(String? presignedUrl, String? bucketKey) {
-  if (bucketKey != null) {
-    return hashKey(bucketKey);
-  } else if (presignedUrl.isNotNullOrEmpty) {
-    return hashKey(parseBucketKey(presignedUrl!));
-  } else {
-    throw ArgumentError(
-      'Either presignedUrl or bucketKey must be provided.',
-    );
+String parseCacheKey(String url) {
+  if (url.isNotNullOrEmpty && Uri.tryParse(url) != null) {
+    return hashKey(parseBucketKey(url));
   }
+  return hashKey(url);
 }
 
 /// check if the url is expired
 bool isUrlExpired(String url) {
-  final uri = Uri.parse(url);
+  final uri = Uri.tryParse(url);
   final expires =
-      uri.queryParameters['X-Amz-Expires'] ?? uri.queryParameters['Expires'];
+      uri?.queryParameters['X-Amz-Expires'] ?? uri?.queryParameters['Expires'];
   if (expires == null) {
     return false;
   }
@@ -127,4 +123,9 @@ bool isUrlExpired(String url) {
     }
     return now.isAfter(expiresDate);
   }
+}
+
+bool isValidUrl(String url) {
+  final uri = Uri.tryParse(url);
+  return uri != null && (uri.isScheme('http') || uri.isScheme('https'));
 }

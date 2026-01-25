@@ -1,10 +1,14 @@
 import 'dart:io';
 
 import 'package:aws_image/aws_image.dart';
+import 'package:aws_image/src/client/exceptions/aws_exception.dart';
+import 'package:aws_image/src/client/response/aws_response.dart';
 import 'package:dio/dio.dart';
 import 'package:equatable/equatable.dart';
 import 'package:flutter/foundation.dart';
 import 'package:fp_logger/fp_logger.dart';
+
+import '../enums.dart';
 
 /// {@template aws_image_request}
 /// A request for an image from AWS.
@@ -19,6 +23,7 @@ abstract class AwsImageRequest with EquatableMixin {
     required this.requestTransformer,
     this.headers = const {},
     this.enableLogging = false,
+    this.httpMethod = HttpMethod.GET,
   });
 
   /// The base URL for the request.
@@ -28,19 +33,23 @@ abstract class AwsImageRequest with EquatableMixin {
   final Map<String, String> headers;
 
   /// The response parser for the request.
-  final PresignedUrlResponseParser responseParser;
+  final ResponseParser responseParser;
 
   /// The request transformer for the request.
-  final PresignedRequestTransformer requestTransformer;
+  final RequestTransformer requestTransformer;
 
   /// Whether to enable logging for the request.
   final bool enableLogging;
 
+  /// The HTTP method for the request to get the presigned URL.
+  /// This will be ignored for GraphQL requests as they always use POST.
+  final HttpMethod httpMethod;
+
   /// request the presigned URL
-  Future<String?> request(
+  Future<AwsResponse?> request(
     String bucketKey, {
     String? contentType,
-    String method = 'GET',
+    AwsUrlType type = AwsUrlType.GET,
   });
 
   @override
@@ -62,10 +71,11 @@ class AwsImageRestRequest extends AwsImageRequest {
   AwsImageRestRequest({
     required super.baseUrl,
     super.headers,
-    super.requestTransformer = const DefaultRestPresignedRequestTransformer(),
+    super.requestTransformer = const DefaultRestRequestTransformer(),
     super.responseParser = const DefaultRestResponseParser(),
     super.enableLogging = false,
     this.queryParameters = const {},
+    super.httpMethod = HttpMethod.GET,
   });
 
   /// The query parameters for the request.
@@ -74,29 +84,30 @@ class AwsImageRestRequest extends AwsImageRequest {
   /// Dio instance for making requests
   late final _dio = Dio()
     ..interceptors.add(DioLogger(
-      requestHeader: false,
-      requestBody: kDebugMode && enableLogging,
-      responseBody: kDebugMode && enableLogging,
-      error: kDebugMode && enableLogging,
+      logRequestBody: false,
+      logResponseBody: kDebugMode && enableLogging,
+      logRequestHeader: kDebugMode && enableLogging,
+      logError: kDebugMode && enableLogging,
     ));
 
   @override
-  Future<String?> request(
+  Future<AwsResponse?> request(
     String bucketKey, {
     String? contentType,
-    String method = 'GET',
+    AwsUrlType type = AwsUrlType.GET,
   }) async {
     try {
-      final response = await _dio.get(
+      final response = await _dio.request(
         baseUrl,
         queryParameters: queryParameters,
         data: requestTransformer.transformRequest(
           bucketKey,
           contentType: contentType,
-          method: method,
+          type: type,
         ),
         options: Options(
           contentType: 'application/json',
+          method: httpMethod.name,
           headers: {
             HttpHeaders.acceptHeader: 'application/json',
             ...headers,
@@ -107,29 +118,22 @@ class AwsImageRestRequest extends AwsImageRequest {
       if (response.statusCode == 200) {
         return responseParser.parseResponse(response);
       } else {
-        throw DioException.badResponse(
-          statusCode: response.statusCode ?? 500,
-          requestOptions: response.requestOptions,
-          response: response,
+        throw AwsException(
+          'Failed to get presigned URL: ${response.statusCode} ${response.statusMessage}',
         );
       }
-    } on DioException catch (error, stackTrace) {
-      Logger.e(
-        'Failed to get presigned URL: ${error.message}',
-        error: error,
-        stackTrace: stackTrace,
-        tag: 'AwsImageClient',
-      );
-      return null;
     } catch (error, stackTrace) {
-      if (error is DioException) rethrow;
       Logger.e(
         'Failed to get presigned URL: ${error.toString()}',
         error: error,
         stackTrace: stackTrace,
         tag: 'AwsImageClient',
       );
-      return null;
+      throw AwsException(
+        'Failed to get presigned URL: ${error.toString()}',
+        stackTrace: stackTrace,
+        originalError: error,
+      );
     }
   }
 
@@ -151,10 +155,10 @@ class AwsImageGraphqlRequest extends AwsImageRequest {
     required super.baseUrl,
     required this.query,
     super.headers,
-    super.requestTransformer = const DefaultGqlPresignedRequestTransformer(),
+    super.requestTransformer = const DefaultGqlRequestTransformer(),
     super.enableLogging = false,
     this.operationName,
-    PresignedUrlResponseParser? responseParser,
+    ResponseParser? responseParser,
   })  : assert(() {
           if (query.isEmpty) {
             throw ArgumentError('Query cannot be empty');
@@ -165,6 +169,7 @@ class AwsImageGraphqlRequest extends AwsImageRequest {
           return true;
         }()),
         super(
+          httpMethod: HttpMethod.POST,
           responseParser:
               responseParser ?? DefaultGqlResponseParser(query: query),
         );
@@ -178,17 +183,17 @@ class AwsImageGraphqlRequest extends AwsImageRequest {
   /// Dio instance for making requests
   late final _dio = Dio()
     ..interceptors.add(GraphqlDioLogger(
-      requestHeader: false,
-      requestBody: kDebugMode && enableLogging,
-      responseBody: kDebugMode && enableLogging,
-      error: kDebugMode && enableLogging,
+      logRequestHeader: false,
+      logRequestBody: kDebugMode && enableLogging,
+      logResponseBody: kDebugMode && enableLogging,
+      logError: kDebugMode && enableLogging,
     ));
 
   @override
-  Future<String?> request(
+  Future<AwsResponse?> request(
     String bucketKey, {
     String? contentType,
-    String method = 'GET',
+    AwsUrlType type = AwsUrlType.GET,
   }) async {
     try {
       String? operation = operationName ?? parseOperationName(query);
@@ -199,7 +204,7 @@ class AwsImageGraphqlRequest extends AwsImageRequest {
           'variables': requestTransformer.transformRequest(
             bucketKey,
             contentType: contentType,
-            method: method,
+            type: type,
           ),
           if (operation != null) 'operationName': operation,
         },
@@ -216,32 +221,25 @@ class AwsImageGraphqlRequest extends AwsImageRequest {
           response.data['errors'] != null ||
           response.data['data'] == null ||
           response.data['data'] is! Map<String, dynamic>) {
-        throw DioException.badResponse(
-          statusCode: response.statusCode ?? 500,
-          requestOptions: response.requestOptions,
-          response: response,
+        throw AwsException(
+          'Failed to get presigned URL: Invalid response format',
         );
       }
       return responseParser.parseResponse(
         response.data as Map<String, dynamic>,
       );
-    } on DioException catch (error, stackTrace) {
-      Logger.e(
-        'Failed to get presigned URL: ${error.message}',
-        error: error,
-        stackTrace: stackTrace,
-        tag: 'AwsImageClient',
-      );
-      return null;
     } catch (error, stackTrace) {
-      if (error is DioException) rethrow;
       Logger.e(
         'Failed to get presigned URL: ${error.toString()}',
         error: error,
         stackTrace: stackTrace,
         tag: 'AwsImageClient',
       );
-      return null;
+      throw AwsException(
+        'Failed to get presigned URL: ${error.toString()}',
+        stackTrace: stackTrace,
+        originalError: error,
+      );
     }
   }
 
