@@ -1,14 +1,10 @@
 import 'dart:io';
 
 import 'package:aws_image/aws_image.dart';
-import 'package:aws_image/src/client/exceptions/aws_exception.dart';
-import 'package:aws_image/src/client/response/aws_response.dart';
 import 'package:dio/dio.dart';
 import 'package:equatable/equatable.dart';
 import 'package:flutter/foundation.dart';
 import 'package:fp_logger/fp_logger.dart';
-
-import '../enums.dart';
 
 /// {@template aws_image_request}
 /// A request for an image from AWS.
@@ -84,10 +80,10 @@ class AwsImageRestRequest extends AwsImageRequest {
   /// Dio instance for making requests
   late final _dio = Dio()
     ..interceptors.add(DioLogger(
-      logRequestBody: false,
-      logResponseBody: kDebugMode && enableLogging,
-      logRequestHeader: kDebugMode && enableLogging,
-      logError: kDebugMode && enableLogging,
+      requestBody: false,
+      responseBody: kDebugMode && enableLogging,
+      requestHeader: kDebugMode && enableLogging,
+      error: kDebugMode && enableLogging,
     ));
 
   @override
@@ -183,10 +179,10 @@ class AwsImageGraphqlRequest extends AwsImageRequest {
   /// Dio instance for making requests
   late final _dio = Dio()
     ..interceptors.add(GraphqlDioLogger(
-      logRequestHeader: false,
-      logRequestBody: kDebugMode && enableLogging,
-      logResponseBody: kDebugMode && enableLogging,
-      logError: kDebugMode && enableLogging,
+      requestHeader: false,
+      responseBody: kDebugMode && enableLogging,
+      requestBody: kDebugMode && enableLogging,
+      error: kDebugMode && enableLogging,
     ));
 
   @override

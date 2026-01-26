@@ -31,7 +31,7 @@ packages:
       path: ".."
       relative: true
     source: path
-    version: "2.0.0"
+    version: "2.0.1"
   boolean_selector:
     dependency: transitive
     description:
@@ -150,10 +150,10 @@ packages:
     dependency: transitive
     description:
       name: fp_logger
-      sha256: d473e95a6273be7bc0321947075132ea99dfbfb7be411dfeb5892c295a5baa20
+      sha256: ccdc079ab04c0f8bf2522bf067d74a3479b7005667ff529df1614e6e9e13f85a
       url: "https://pub.dev"
     source: hosted
-    version: "3.0.0"
+    version: "3.0.1"
   gql:
     dependency: transitive
     description:

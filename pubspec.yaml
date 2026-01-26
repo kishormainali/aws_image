@@ -1,6 +1,6 @@
 name: aws_image
 description: "A Flutter package for loading, caching, and displaying images from AWS S3 using presigned URLs or BuckerKey"
-version: 2.0.0
+version: 2.0.1
 homepage: https://github.com/kishormainali/aws_image
 repository: https://github.com/kishormainali/aws_image
 
@@ -17,7 +17,7 @@ dependencies:
   path: any
   path_provider: ^2.1.5
   mime: ^2.0.0
-  fp_logger: ^3.0.0
+  fp_logger: ^3.0.1
   meta: any # For annotations like @required
   flutter_svg: ^2.2.3
   equatable: ^2.0.8
