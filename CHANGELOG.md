@@ -1,5 +1,9 @@
 # CHANGELOG
 
+## 2.0.1 (2026-01-28)
+
+- **Chore**: Update fp_logger to latest version
+
 ## 2.0.0 (2026-01-25)
 
 - **Client**:
