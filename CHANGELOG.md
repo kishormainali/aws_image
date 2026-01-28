@@ -1,6 +1,11 @@
 # CHANGELOG
 
+## 2.0.2 (2026-01-28)
+
+- **Chore** updated fp_logger dependency to latest version
+
 ## 2.0.1 (2026-01-26)
+
 - **Chore** updated fp_logger dependency to latest version
 
 ## 2.0.0 (2026-01-25)

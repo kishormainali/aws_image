@@ -80,10 +80,14 @@ class AwsImageRestRequest extends AwsImageRequest {
   /// Dio instance for making requests
   late final _dio = Dio()
     ..interceptors.add(DioLogger(
-      requestBody: false,
-      responseBody: kDebugMode && enableLogging,
-      requestHeader: kDebugMode && enableLogging,
-      error: kDebugMode && enableLogging,
+      loggerOptions: LoggerOptions(
+        requestBody: enableLogging && kDebugMode,
+        responseBody: enableLogging && kDebugMode,
+        requestHeader: false,
+        redact: false,
+        error: enableLogging && kDebugMode,
+        responseHeader: false,
+      ),
     ));
 
   @override
@@ -179,10 +183,14 @@ class AwsImageGraphqlRequest extends AwsImageRequest {
   /// Dio instance for making requests
   late final _dio = Dio()
     ..interceptors.add(GraphqlDioLogger(
-      requestHeader: false,
-      responseBody: kDebugMode && enableLogging,
-      requestBody: kDebugMode && enableLogging,
-      error: kDebugMode && enableLogging,
+      loggerOptions: LoggerOptions(
+        requestBody: enableLogging && kDebugMode,
+        responseBody: enableLogging && kDebugMode,
+        requestHeader: false,
+        redact: false,
+        error: enableLogging && kDebugMode,
+        responseHeader: false,
+      ),
     ));
 
   @override
